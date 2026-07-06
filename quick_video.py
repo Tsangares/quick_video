@@ -1358,8 +1358,10 @@ class ExportPanel(QWidget):
         self._total_parts = len(kept_segments)
 
         self.setStyleSheet("background: transparent;")
+        self.setFocusPolicy(Qt.StrongFocus)
 
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -1368,23 +1370,10 @@ class ExportPanel(QWidget):
         layout.setSpacing(14)
         layout.setContentsMargins(16, 14, 16, 14)
 
-        # Header
-        header_row = QHBoxLayout()
+        # Header (just the label — Cancel moves to the sticky action bar)
         self._header = QLabel("<b>Exporting...</b>")
         self._header.setStyleSheet("font-size: 18px; color: #FF9800;")
-        header_row.addWidget(self._header)
-        header_row.addStretch()
-        self._cancel_btn = QPushButton("Cancel")
-        self._cancel_btn.setFixedHeight(30)
-        self._cancel_btn.setFocusPolicy(Qt.NoFocus)
-        self._cancel_btn.setCursor(Qt.PointingHandCursor)
-        self._cancel_btn.setStyleSheet(
-            "QPushButton { background: #b71c1c; color: white; font-size: 12px; font-weight: bold; "
-            "border-radius: 4px; padding: 2px 14px; } "
-            "QPushButton:hover { background: #d32f2f; }"
-        )
-        header_row.addWidget(self._cancel_btn)
-        layout.addLayout(header_row)
+        layout.addWidget(self._header)
 
         # Current task — prominent
         self._task_label = QLabel("Preparing...")
@@ -1417,9 +1406,12 @@ class ExportPanel(QWidget):
         time_row.addWidget(self._pct_label)
         layout.addLayout(time_row)
 
-        layout.addWidget(self._make_sep())
-
-        # Stats — single column layout, fixed label widths
+        # Stats section (toggleable as a group after completion)
+        self._stats_section = QWidget()
+        stats_layout = QVBoxLayout(self._stats_section)
+        stats_layout.setSpacing(8)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.addWidget(self._make_sep())
         self._stat_values = {}
 
         def stat_row(label_text, key):
@@ -1435,18 +1427,22 @@ class ExportPanel(QWidget):
             self._stat_values[key] = val
             return row
 
-        layout.addLayout(stat_row("Bitrate", "bitrate"))
-        layout.addLayout(stat_row("Speed", "speed"))
-        layout.addLayout(stat_row("Output Size", "out_size"))
-        layout.addLayout(stat_row("Frames", "frames"))
-        layout.addLayout(stat_row("FPS", "fps"))
+        stats_layout.addLayout(stat_row("Bitrate", "bitrate"))
+        stats_layout.addLayout(stat_row("Speed", "speed"))
+        stats_layout.addLayout(stat_row("Output Size", "out_size"))
+        stats_layout.addLayout(stat_row("Frames", "frames"))
+        stats_layout.addLayout(stat_row("FPS", "fps"))
+        layout.addWidget(self._stats_section)
 
-        layout.addWidget(self._make_sep())
-
-        # Source info
+        # Source info section (toggleable)
+        self._source_section = QWidget()
+        source_layout = QVBoxLayout(self._source_section)
+        source_layout.setSpacing(8)
+        source_layout.setContentsMargins(0, 0, 0, 0)
+        source_layout.addWidget(self._make_sep())
         info_header = QLabel("<b>Source</b>")
         info_header.setStyleSheet("font-size: 14px; color: #888;")
-        layout.addWidget(info_header)
+        source_layout.addWidget(info_header)
 
         def info_row(label_text, value):
             row = QHBoxLayout()
@@ -1461,19 +1457,23 @@ class ExportPanel(QWidget):
             row.addWidget(val, 1)
             return row
 
-        layout.addLayout(info_row("File", source_info.get('name', '—')))
-        layout.addLayout(info_row("Size", source_info.get('size', '—')))
-        layout.addLayout(info_row("Resolution", source_info.get('resolution', '—')))
-        layout.addLayout(info_row("Codec", source_info.get('codec', '—')))
-        layout.addLayout(info_row("Mode", export_mode))
-        layout.addLayout(info_row("Segments", f"{len(kept_segments)} kept"))
-        layout.addLayout(info_row("Kept", fmt_time(self._total_duration)))
-        layout.addLayout(info_row("Removed", fmt_time(source_info.get('duration', 0) - self._total_duration)))
-        layout.addLayout(info_row("Output", os.path.basename(output_path)))
+        source_layout.addLayout(info_row("File", source_info.get('name', '—')))
+        source_layout.addLayout(info_row("Size", source_info.get('size', '—')))
+        source_layout.addLayout(info_row("Resolution", source_info.get('resolution', '—')))
+        source_layout.addLayout(info_row("Codec", source_info.get('codec', '—')))
+        source_layout.addLayout(info_row("Mode", export_mode))
+        source_layout.addLayout(info_row("Segments", f"{len(kept_segments)} kept"))
+        source_layout.addLayout(info_row("Kept", fmt_time(self._total_duration)))
+        source_layout.addLayout(info_row("Removed", fmt_time(source_info.get('duration', 0) - self._total_duration)))
+        source_layout.addLayout(info_row("Output", os.path.basename(output_path)))
+        layout.addWidget(self._source_section)
 
-        layout.addWidget(self._make_sep())
-
-        # Log area (collapsible)
+        # Log section (toggleable)
+        self._log_section = QWidget()
+        log_layout = QVBoxLayout(self._log_section)
+        log_layout.setSpacing(8)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.addWidget(self._make_sep())
         self._log_toggle = QPushButton("Show Log")
         self._log_toggle.setFixedHeight(26)
         self._log_toggle.setFocusPolicy(Qt.NoFocus)
@@ -1484,7 +1484,7 @@ class ExportPanel(QWidget):
             "QPushButton:hover { color: #aaa; border-color: #666; }"
         )
         self._log_toggle.clicked.connect(self._toggle_log)
-        layout.addWidget(self._log_toggle)
+        log_layout.addWidget(self._log_toggle)
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
@@ -1494,14 +1494,53 @@ class ExportPanel(QWidget):
             "font-family: monospace; border: 1px solid #333; border-radius: 4px; }"
         )
         self._log.setVisible(False)
-        layout.addWidget(self._log)
+        log_layout.addWidget(self._log)
+        layout.addWidget(self._log_section)
 
-        # Action buttons (hidden until complete)
-        self._actions_widget = QWidget()
-        actions_layout = QVBoxLayout(self._actions_widget)
-        actions_layout.setSpacing(8)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        btn_row1 = QHBoxLayout()
+        # "Show details" toggle — visible only after completion (re-shows the
+        # three sections above which are hidden in show_complete).
+        self._details_toggle = QPushButton("▸ Show details")
+        self._details_toggle.setFixedHeight(28)
+        self._details_toggle.setFocusPolicy(Qt.NoFocus)
+        self._details_toggle.setCursor(Qt.PointingHandCursor)
+        self._details_toggle.setStyleSheet(
+            "QPushButton { background: transparent; color: #888; font-size: 13px; "
+            "text-align: left; border: none; padding: 4px 0; } "
+            "QPushButton:hover { color: #ddd; }"
+        )
+        self._details_toggle.clicked.connect(self._toggle_details)
+        self._details_toggle.setVisible(False)
+        layout.addWidget(self._details_toggle)
+
+        layout.addStretch()
+
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(scroll, 1)
+
+        # ── Sticky bottom action bar (always visible) ────────────────
+        self._action_bar = QWidget()
+        self._action_bar.setStyleSheet(
+            "QWidget { background: #2a2a2a; border-top: 1px solid #444; }"
+        )
+        bar_layout = QHBoxLayout(self._action_bar)
+        bar_layout.setContentsMargins(12, 8, 12, 8)
+        bar_layout.setSpacing(8)
+
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setFixedHeight(34)
+        self._cancel_btn.setFocusPolicy(Qt.NoFocus)
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(
+            "QPushButton { background: #b71c1c; color: white; font-size: 13px; font-weight: bold; "
+            "border-radius: 4px; padding: 4px 16px; } "
+            "QPushButton:hover { background: #d32f2f; }"
+        )
+        bar_layout.addWidget(self._cancel_btn)
+        bar_layout.addStretch()
+
         self._open_folder_btn = QPushButton("Open Folder")
         self._open_video_btn = QPushButton("Open Video")
         for btn in (self._open_folder_btn, self._open_video_btn):
@@ -1510,45 +1549,39 @@ class ExportPanel(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             btn.setStyleSheet(
                 "QPushButton { background: #1565C0; color: white; font-size: 13px; font-weight: bold; "
-                "border-radius: 4px; padding: 4px 16px; } "
+                "border-radius: 4px; padding: 4px 14px; } "
                 "QPushButton:hover { background: #1976D2; }"
             )
-        btn_row1.addWidget(self._open_folder_btn)
-        btn_row1.addWidget(self._open_video_btn)
-        actions_layout.addLayout(btn_row1)
+            btn.setVisible(False)
+            bar_layout.addWidget(btn)
 
-        btn_row2 = QHBoxLayout()
         self._delete_btn = QPushButton("Delete Original")
         self._delete_btn.setFixedHeight(34)
         self._delete_btn.setFocusPolicy(Qt.NoFocus)
         self._delete_btn.setCursor(Qt.PointingHandCursor)
         self._delete_btn.setStyleSheet(
             "QPushButton { background: #4a1a1a; color: #ef5350; font-size: 13px; font-weight: bold; "
-            "border: 1px solid #c62828; border-radius: 4px; padding: 4px 16px; } "
+            "border: 1px solid #c62828; border-radius: 4px; padding: 4px 14px; } "
             "QPushButton:hover { background: #5a2a2a; }"
         )
+        self._delete_btn.setVisible(False)
+        bar_layout.addWidget(self._delete_btn)
+
         self._done_btn = QPushButton("Done")
         self._done_btn.setFixedHeight(34)
         self._done_btn.setFocusPolicy(Qt.NoFocus)
         self._done_btn.setCursor(Qt.PointingHandCursor)
         self._done_btn.setStyleSheet(
             "QPushButton { background: #2E7D32; color: white; font-size: 13px; font-weight: bold; "
-            "border-radius: 4px; padding: 4px 16px; } "
+            "border-radius: 4px; padding: 4px 18px; } "
             "QPushButton:hover { background: #388E3C; }"
         )
-        btn_row2.addWidget(self._delete_btn)
-        btn_row2.addWidget(self._done_btn)
-        actions_layout.addLayout(btn_row2)
+        self._done_btn.setVisible(False)
+        bar_layout.addWidget(self._done_btn)
 
-        self._actions_widget.setVisible(False)
-        layout.addWidget(self._actions_widget)
+        self._completed = False  # True after show_complete or show_error
 
-        layout.addStretch()
-
-        scroll.setWidget(inner)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        outer.addWidget(self._action_bar)
 
         # Connect buttons
         self._open_folder_btn.clicked.connect(lambda: self.open_folder_requested.emit(self._output_path))
@@ -1567,6 +1600,19 @@ class ExportPanel(QWidget):
         visible = not self._log.isVisible()
         self._log.setVisible(visible)
         self._log_toggle.setText("Hide Log" if visible else "Show Log")
+
+    def _toggle_details(self):
+        visible = not self._stats_section.isVisible()
+        self._stats_section.setVisible(visible)
+        self._source_section.setVisible(visible)
+        self._log_section.setVisible(visible)
+        self._details_toggle.setText("▾ Hide details" if visible else "▸ Show details")
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape and self._completed:
+            self.dismiss_requested.emit()
+            return
+        super().keyPressEvent(event)
 
     def get_cancel_button(self):
         return self._cancel_btn
@@ -1604,9 +1650,12 @@ class ExportPanel(QWidget):
         total_dur = data.get('total_duration', self._total_duration)
         current_time = data.get('time', 0)
 
+        # _current_part is 1-based ("Part N/M"), so the segment currently
+        # running is index _current_part - 1. Anything before it is done.
+        active_idx = max(0, self._current_part - 1)
         completed_dur = sum(
             (s.end - s.start) / s.speed
-            for s in self._kept_segments[:self._current_part]
+            for s in self._kept_segments[:active_idx]
         )
         overall_progress = (completed_dur + current_time) / total_dur if total_dur > 0 else 0
         overall_progress = min(0.99, max(0.0, overall_progress))
@@ -1614,12 +1663,12 @@ class ExportPanel(QWidget):
         pct = int(overall_progress * 100)
         self._pct_label.setText(f"{pct}%")
 
-        # Update segment bar
-        if self._current_part < self._total_parts:
-            seg = self._kept_segments[self._current_part]
+        # Update segment bar for the currently-running segment
+        if active_idx < self._total_parts:
+            seg = self._kept_segments[active_idx]
             seg_dur = (seg.end - seg.start) / seg.speed
             seg_frac = current_time / seg_dur if seg_dur > 0 else 0
-            self._seg_bar.set_progress(self._current_part, min(1.0, seg_frac))
+            self._seg_bar.set_progress(active_idx, min(1.0, seg_frac))
 
         # ETA — the star
         if overall_progress > 0.01 and elapsed > 2:
@@ -1643,7 +1692,14 @@ class ExportPanel(QWidget):
         self._seg_bar.set_complete()
 
         elapsed = _time.time() - self._start_time
-        self._task_label.setText(fmt_size(size))
+        size_text = fmt_size(size)
+        src_size = self._source_info.get('raw_size', 0)
+        if src_size > 0:
+            ratio = size / src_size
+            size_text = f"{fmt_size(size)} ({ratio:.0%} of source)"
+            self._stat_values['out_size'].setText(size_text)
+
+        self._task_label.setText(size_text)
         self._task_label.setStyleSheet(
             "font-size: 16px; font-weight: bold; color: #4CAF50; "
             "background: #1a2a1a; border: 1px solid #2E7D32; border-radius: 6px; padding: 10px 8px;"
@@ -1653,13 +1709,25 @@ class ExportPanel(QWidget):
         self._elapsed_label.setText(f"Took: {self._fmt_human_time(elapsed)}")
         self._pct_label.setText("100%")
 
-        src_size = self._source_info.get('raw_size', 0)
-        if src_size > 0:
-            ratio = size / src_size
-            self._stat_values['out_size'].setText(f"{fmt_size(size)} ({ratio:.0%} of source)")
+        # Compact completion view: hide the noisy sections; user can re-expand.
+        self._stats_section.setVisible(False)
+        self._source_section.setVisible(False)
+        self._log_section.setVisible(False)
+        self._details_toggle.setText("▸ Show details")
+        self._details_toggle.setVisible(True)
 
+        # Sticky bar: show post-export actions, hide Cancel.
         self._cancel_btn.setVisible(False)
-        self._actions_widget.setVisible(True)
+        self._open_folder_btn.setVisible(True)
+        self._open_video_btn.setVisible(True)
+        self._delete_btn.setVisible(True)
+        self._done_btn.setVisible(True)
+
+        self._completed = True
+        self.setFocus()
+        # Make sure the user sees the top of the completion view, not whatever
+        # they had scrolled to mid-export.
+        self._scroll.verticalScrollBar().setValue(0)
 
     def show_error(self, err):
         """Show error state."""
@@ -1672,12 +1740,17 @@ class ExportPanel(QWidget):
             "font-size: 14px; color: #ef5350; "
             "background: #3a1a1a; border: 1px solid #c62828; border-radius: 6px; padding: 10px 8px;"
         )
+
+        # Sticky bar: only Close remains.
         self._cancel_btn.setVisible(False)
-        self._done_btn.setText("Close")
-        self._delete_btn.setVisible(False)
         self._open_folder_btn.setVisible(False)
         self._open_video_btn.setVisible(False)
-        self._actions_widget.setVisible(True)
+        self._delete_btn.setVisible(False)
+        self._done_btn.setText("Close")
+        self._done_btn.setVisible(True)
+
+        self._completed = True
+        self.setFocus()
 
 
 # ── Segment List Item ────────────────────────────────────────────────────────
@@ -4462,6 +4535,12 @@ class QuickVideoApp(QMainWindow):
 
     def _show_export_panel(self, source_info, kept_segments, export_mode, output_path):
         """Hide segments/subtitles and show the export dashboard."""
+        # Tear down any prior panel before inserting a new one — otherwise
+        # repeated exports stack orphan ExportPanel widgets in right_layout
+        # and push the action bar / segments view off-screen.
+        if getattr(self, 'export_panel', None) is not None:
+            self._dismiss_export_panel()
+
         self.seg_header.setVisible(False)
         self.seg_separator.setVisible(False)
         self.right_splitter.setVisible(False)
