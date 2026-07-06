@@ -2534,6 +2534,12 @@ class CompressPanel(QWidget):
             f"\u2192  <b>Compressed:</b> {fmt_size(stats['output_size'])}  |  "
             f"<span style='color: #4CAF50;'>{stats['savings']:.1f}% smaller</span>")
         self.cstack.setCurrentIndex(2)
+        # Defer MPV init so the preview widget is visible/mapped first
+        QTimer.singleShot(100, lambda: self._start_preview(path))
+
+    def _start_preview(self, path):
+        self.preview_widget.repaint()
+        QApplication.processEvents()
         self._init_preview_mpv()
         if self._preview_mpv:
             self._preview_mpv.play(path)
@@ -2900,18 +2906,10 @@ class QuickVideoApp(QMainWindow):
         self.video_widget.setAttribute(Qt.WA_NativeWindow)
         left.addWidget(self.video_widget, 1)
 
-        # Transparent overlay for click-to-seek (left half = -15s, right half = +15s)
-        self.video_click_overlay = QWidget(self.video_widget)
-        self.video_click_overlay.setStyleSheet("background: transparent;")
-        self.video_click_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.video_click_overlay.installEventFilter(self)
+        # Click-to-seek handled via eventFilter on video_widget directly
         self.video_widget.installEventFilter(self)
 
-        # Privacy overlay (opaque black, covers video when privacy mode is on)
-        self._privacy_overlay = QWidget(self.video_widget)
-        self._privacy_overlay.setStyleSheet("background: #0a0a0a;")
-        self._privacy_overlay.setVisible(self._privacy_mode)
-        self._privacy_overlay.raise_()
+        # Privacy mode: use mpv brightness=-100 to black out video (no overlay needed)
 
         # Placeholder label (shown over video widget when nothing loaded)
         self.frame_label = QLabel("Open a video to begin")
@@ -3271,6 +3269,8 @@ class QuickVideoApp(QMainWindow):
                 cursor_autohide='no',
                 log_handler=lambda *a: None,
             )
+            if self._privacy_mode:
+                self.mpv_player.brightness = -100
         except Exception as e:
             self.status.setText(f"mpv init failed: {e}")
             self.mpv_player = None
@@ -3279,8 +3279,11 @@ class QuickVideoApp(QMainWindow):
         global PRIVACY_MODE
         self._privacy_mode = not self._privacy_mode
         PRIVACY_MODE = self._privacy_mode
-        self._privacy_overlay.setVisible(self._privacy_mode)
-        self._privacy_overlay.raise_()
+        if hasattr(self, 'mpv_player') and self.mpv_player:
+            try:
+                self.mpv_player.brightness = -100 if self._privacy_mode else 0
+            except Exception:
+                pass
         self._privacy_indicator.setVisible(self._privacy_mode)
         self.timeline.privacy_mode = self._privacy_mode
         self.timeline.update()
@@ -4634,12 +4637,8 @@ class QuickVideoApp(QMainWindow):
 
     def eventFilter(self, obj, event):
         """Intercept keys globally and clear text focus on outside clicks."""
-        # Keep overlay sized to video widget
-        if event.type() == QEvent.Resize and obj is self.video_widget:
-            self.video_click_overlay.setGeometry(self.video_widget.rect())
-            self._privacy_overlay.setGeometry(self.video_widget.rect())
-        # Click-to-seek on video overlay
-        if event.type() == QEvent.MouseButtonPress and obj is self.video_click_overlay:
+        # Click-to-seek on video widget (left half = -15s, right half = +15s)
+        if event.type() == QEvent.MouseButtonPress and obj is self.video_widget:
             if self.filepath and self.duration > 0:
                 half = self.video_widget.width() / 2
                 if event.pos().x() < half:
