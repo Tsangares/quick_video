@@ -2860,7 +2860,7 @@ class QuickVideoApp(QMainWindow):
         # ── Tab bar: Download / Open ─────────────────────────────────
         self.tabs = QTabWidget()
         self._tabs_expanded = True
-        self._tabs_full_height = 120
+        self._tabs_full_height = 148
         self._tabs_collapsed_height = 32
         self.tabs.setFixedHeight(self._tabs_full_height)
         self.tabs.tabBarClicked.connect(self._on_tab_clicked)
@@ -2875,7 +2875,8 @@ class QuickVideoApp(QMainWindow):
         # Tab 1: Download URL (default)
         dl_tab = QWidget()
         dl_layout = QVBoxLayout(dl_tab)
-        dl_layout.setContentsMargins(16, 10, 16, 10)
+        dl_layout.setContentsMargins(16, 12, 16, 12)
+        dl_layout.setSpacing(10)
         url_row = QHBoxLayout()
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("Paste video URL (YouTube, TikTok, Twitter, etc.)")
@@ -2891,7 +2892,7 @@ class QuickVideoApp(QMainWindow):
         url_row.addWidget(self.dl_btn)
         dl_layout.addLayout(url_row)
         self.dl_progress = QProgressBar()
-        self.dl_progress.setFixedHeight(20)
+        self.dl_progress.setFixedHeight(22)
         self.dl_progress.setVisible(False)
         dl_layout.addWidget(self.dl_progress)
         self.dl_status = QLabel("")
@@ -2928,7 +2929,8 @@ class QuickVideoApp(QMainWindow):
         # Tab 3: Download Queue
         queue_tab = QWidget()
         queue_layout = QVBoxLayout(queue_tab)
-        queue_layout.setContentsMargins(16, 10, 16, 10)
+        queue_layout.setContentsMargins(16, 12, 16, 12)
+        queue_layout.setSpacing(10)
         queue_top = QHBoxLayout()
         self.queue_input = QLineEdit()
         self.queue_input.setPlaceholderText("Paste URL to queue for background download")
@@ -2944,11 +2946,12 @@ class QuickVideoApp(QMainWindow):
         queue_top.addWidget(self.queue_add_btn)
         queue_layout.addLayout(queue_top)
         queue_bottom = QHBoxLayout()
+        queue_bottom.setSpacing(12)
         self.queue_status = QLabel("")
         self.queue_status.setStyleSheet("color: #aaa; font-size: 12px;")
         queue_bottom.addWidget(self.queue_status, 1)
         self.queue_progress = QProgressBar()
-        self.queue_progress.setFixedHeight(20)
+        self.queue_progress.setFixedHeight(22)
         self.queue_progress.setFixedWidth(300)
         self.queue_progress.setVisible(False)
         queue_bottom.addWidget(self.queue_progress)
@@ -3653,6 +3656,10 @@ class QuickVideoApp(QMainWindow):
         else:
             self.dl_progress.setRange(0, 0)
         self.dl_status.setText(msg[:120])
+        if not self._tabs_expanded:
+            self._expand_tabs()
+        else:
+            self._tab_collapse_timer.start()
 
     def _on_dl_finished(self, filepath):
         self._reset_dl_btn()
@@ -3730,6 +3737,10 @@ class QuickVideoApp(QMainWindow):
             self.queue_progress.setFormat(f"{pct:.1f}%")
         else:
             self.queue_progress.setRange(0, 0)
+        if not self._tabs_expanded and self.tabs.currentIndex() == 2:
+            self._expand_tabs()
+        else:
+            self._tab_collapse_timer.start()
 
     def _on_queue_finished(self, filepath):
         self.queue_status.setText(f"Done: {Path(filepath).name}  ({len(self._queue)} queued)")
@@ -4598,7 +4609,19 @@ class QuickVideoApp(QMainWindow):
             # Fallback if panel was somehow dismissed
             styled_msg(self, QMessageBox.Information, "Done", f"Exported to:\n{path}\n\nSize: {fmt_size(size)}")
 
+    def _downloads_active(self):
+        dl = getattr(self, 'dl_worker', None)
+        if dl and dl.isRunning():
+            return True
+        qw = getattr(self, '_queue_worker', None)
+        if qw and qw.isRunning():
+            return True
+        return False
+
     def _collapse_tabs(self):
+        if self._downloads_active():
+            self._tab_collapse_timer.start()
+            return
         if self._tabs_expanded:
             self._tabs_expanded = False
             self.tabs.setFixedHeight(self._tabs_collapsed_height)
