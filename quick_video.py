@@ -473,10 +473,17 @@ class ExportWorker(QThread):
         style = "FontSize=24,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,MarginV=40"
         return f"subtitles='{escaped}':force_style='{style}'"
 
-    _FFMPEG_PROGRESS_RE = re.compile(
-        r'frame=\s*(\d+)\s+fps=\s*([\d.]+)\s+.*size=\s*(\S+)\s+'
-        r'time=\s*([\d:.]+)\s+bitrate=\s*(\S+)\s+speed=\s*(\S+)'
-    )
+    # Each field extracted independently — ffmpeg may emit them in varying
+    # order and with extra fields (dup=, drop=, q=) in between. fps/bitrate
+    # can also be N/A early in encoding.
+    _FFMPEG_FIELD_RES = {
+        'frame':   re.compile(r'frame=\s*(\d+)'),
+        'fps':     re.compile(r'fps=\s*([\d.]+|N/A)'),
+        'size':    re.compile(r'(?:L?size|total_size)=\s*(\S+)'),
+        'time':    re.compile(r'time=\s*([\d:.]+|N/A)'),
+        'bitrate': re.compile(r'bitrate=\s*(\S+)'),
+        'speed':   re.compile(r'speed=\s*(\S+)'),
+    }
 
     def _parse_ffmpeg_time(self, ts):
         parts = ts.split(':')
@@ -512,19 +519,26 @@ class ExportWorker(QThread):
                             text = line.decode(errors='replace').strip()
                             if not text:
                                 continue
-                            m = self._FFMPEG_PROGRESS_RE.search(text)
-                            if m:
-                                t = self._parse_ffmpeg_time(m.group(4))
-                                self.detail.emit({
-                                    'frame': int(m.group(1)),
-                                    'fps': float(m.group(2)) if m.group(2) != 'N/A' else 0,
-                                    'size': m.group(3),
-                                    'time': t,
-                                    'bitrate': m.group(5),
-                                    'speed': m.group(6),
-                                    'elapsed': _time.time() - self._start_time if self._start_time else 0,
-                                    'total_duration': self._total_duration,
-                                })
+                            if 'time=' not in text or 'frame=' not in text:
+                                continue
+                            fields = {}
+                            for key, rx in self._FFMPEG_FIELD_RES.items():
+                                m = rx.search(text)
+                                if m:
+                                    fields[key] = m.group(1)
+                            if 'time' not in fields or fields['time'] == 'N/A':
+                                continue
+                            fps_raw = fields.get('fps', '0')
+                            self.detail.emit({
+                                'frame': int(fields.get('frame', '0')),
+                                'fps': float(fps_raw) if fps_raw != 'N/A' else 0,
+                                'size': fields.get('size', 'N/A'),
+                                'time': self._parse_ffmpeg_time(fields['time']),
+                                'bitrate': fields.get('bitrate', 'N/A'),
+                                'speed': fields.get('speed', 'N/A'),
+                                'elapsed': _time.time() - self._start_time if self._start_time else 0,
+                                'total_duration': self._total_duration,
+                            })
             except Exception:
                 try:
                     self._process.wait(timeout=0.3)
@@ -590,8 +604,10 @@ class ExportWorker(QThread):
                     f.write(f"file '{p}'\n")
             self.progress.emit("Joining segments...")
             cmd = [
-                'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
+                'ffmpeg', '-y', '-fflags', '+genpts',
+                '-f', 'concat', '-safe', '0',
                 '-i', list_path, '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart', intermediate
             ]
             if not self._run_cmd(cmd, "Concat"):
@@ -632,7 +648,7 @@ class ExportWorker(QThread):
         self.finished.emit(str(self.output_path))
 
     def _build_segment_cmd(self, seg, out_path):
-        """Build ffmpeg command for a single segment, re-encoding if speed != 1.0."""
+        """Build ffmpeg command for a single segment. Stream-copies when possible; re-encodes only when speed changes or for very short segments."""
         if seg.speed != 1.0:
             # Re-encode with speed change; atempo preserves pitch
             vf = f"setpts={1.0/seg.speed}*PTS"
@@ -646,11 +662,11 @@ class ExportWorker(QThread):
             af = ",".join(atempo_filters)
             return [
                 'ffmpeg', '-y',
-                '-i', str(self.filepath),
                 '-ss', str(seg.start),
+                '-i', str(self.filepath),
                 '-t', str(seg.end - seg.start),
                 '-vf', vf, '-af', af,
-                '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast',
                 '-c:a', 'aac',
                 '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart',
@@ -660,22 +676,31 @@ class ExportWorker(QThread):
             # Short segments: re-encode to avoid keyframe stuttering
             return [
                 'ffmpeg', '-y',
-                '-i', str(self.filepath),
                 '-ss', str(seg.start),
+                '-i', str(self.filepath),
                 '-t', str(seg.end - seg.start),
-                '-c:v', 'libx264', '-crf', '18', '-preset', 'fast',
+                '-c:v', 'libx264', '-crf', '20', '-preset', 'veryfast',
                 '-c:a', 'aac',
                 '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart',
                 out_path
             ]
         else:
+            # Video stream-copy (snaps to keyframe) + audio re-encode.
+            # Pure -c copy lets audio frames drift across cut boundaries and
+            # leaves per-part PTS inconsistent, which after concat produces
+            # MP4s with wildly inflated duration in moov (a "30s" clip
+            # reported as 5 min) and progressive A/V desync. Re-encoding
+            # audio + regenerating PTS keeps each part clean for concat.
             return [
                 'ffmpeg', '-y',
+                '-fflags', '+genpts',
                 '-ss', str(seg.start),
                 '-i', str(self.filepath),
                 '-t', str(seg.end - seg.start),
-                '-c', 'copy', '-avoid_negative_ts', 'make_zero',
+                '-c:v', 'copy',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart',
                 out_path
             ]
@@ -705,8 +730,10 @@ class ExportWorker(QThread):
                     f.write(f"file '{p}'\n")
             self.progress.emit("Joining segments...")
             cmd = [
-                'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
+                'ffmpeg', '-y', '-fflags', '+genpts',
+                '-f', 'concat', '-safe', '0',
                 '-i', list_path, '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart', str(self.output_path)
             ]
             if not self._run_cmd(cmd, "Concat"):
@@ -748,8 +775,10 @@ class ExportWorker(QThread):
             intermediate = os.path.join(tmpdir, "intermediate.mp4")
             self.progress.emit("Joining segments...")
             cmd = [
-                'ffmpeg', '-y', '-f', 'concat', '-safe', '0',
+                'ffmpeg', '-y', '-fflags', '+genpts',
+                '-f', 'concat', '-safe', '0',
                 '-i', list_path, '-c', 'copy',
+                '-avoid_negative_ts', 'make_zero',
                 '-movflags', '+faststart', intermediate
             ]
             if not self._run_cmd(cmd, "Concat"):
@@ -4246,7 +4275,7 @@ class QuickVideoApp(QMainWindow):
                 return
             burn_subs = (reply == QMessageBox.Yes)
         else:
-            mode = "Audio re-encode for music mix." if self.music_file else "Stream copy (no re-encode) — fast."
+            mode = "Audio re-encode for music mix." if self.music_file else "Video stream-copy + audio re-encode — fast."
             msg = (
                 f"Keeping {len(kept)} segment(s): {fmt_time(total_kept)}\n"
                 f"Removing: {fmt_time(total_removed)}{music_note}\n\n"
@@ -4282,7 +4311,7 @@ class QuickVideoApp(QMainWindow):
         elif any(seg.speed != 1.0 for seg in kept):
             export_mode = "Re-encode (speed change)"
         else:
-            export_mode = "Stream copy (no re-encode)"
+            export_mode = "Video stream-copy + audio re-encode"
 
         source_info = {
             'name': Path(self.filepath).name,
